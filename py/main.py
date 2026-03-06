@@ -9,8 +9,8 @@ import io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-FILE_NAME = r'D:\pykyrs\englishPhotojpg.jpg'
+pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
+FILE_NAME = r'C:\Users\user\Desktop\pydiplom\OCRWithGrid\englishPhoto.jpg'
 
 img_original = cv2.imread(FILE_NAME)
 if img_original is None:
@@ -23,63 +23,37 @@ img_gray = cv2.cvtColor(img_original, cv2.COLOR_BGR2GRAY)
 h, w = h_orig, w_orig
 angle = 0
 
-GRID_STEP = 80
-grid_points = []
-selection_rect = None
-selected_point = None
+# Переменные для растягиваемого куба
+drawing_rect = False
+rect_start = (0, 0)
+selected_rect = None  # Готовый куб для поворота (x, y, width, height)
+current_mouse_pos = (0, 0)
 
-def create_grid_points():
-    points = []
-    for i in range(0, h, GRID_STEP):
-        for j in range(0, w, GRID_STEP):
-            points.append((j, i))
-    return points
-
-def draw_grid(img, highlight_point=None):
-    grid_img = img.copy()
-    
-    for i in range(0, h, GRID_STEP):
-        cv2.line(grid_img, (0, i), (w, i), (0, 255, 0), 2)
-    for j in range(0, w, GRID_STEP):
-        cv2.line(grid_img, (j, 0), (j, h), (0, 255, 0), 2)
-    
-    for point in grid_points:
-        color = (0, 255, 255) if point == highlight_point else (0, 255, 0)
-        cv2.circle(grid_img, point, 15, color, -1)
-    
-    if selection_rect:
-        x, y, rw, rh = selection_rect
-        cv2.rectangle(grid_img, (x, y), (x+rw, y+rh), (0, 0, 255), 3)
-    
-    return grid_img
-
-def rotate_region_around_point(center, angle_deg):
+def rotate_region_around_rect(rect, angle_deg):
+    """Поворот ТОЧНО выделенной области без искажений"""
     global img_current, img_gray
     
-    cx, cy = center
-    size = GRID_STEP
-    half = size // 2
+    x, y, rw, rh = rect
     
-    x1, y1 = max(0, cx-half), max(0, cy-half)
-    x2, y2 = min(w, cx+half), min(h, cy+half)
+    # Берем ТОЛЬКО выделенную область
+    region = img_current[y:y+rh, x:x+rw].copy()
     
-    if x2 <= x1 or y2 <= y1:
-        return
-        
-    region = img_current[y1:y2, x1:x2].copy()
-    rows, cols = region.shape[:2]
+    # Поворот относительно ЦЕНТРА выделенной области
+    center = (rw // 2, rh // 2)
+    M = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
     
-    M = cv2.getRotationMatrix2D((cols//2, rows//2), angle_deg, 1.0)
-    rotated = cv2.warpAffine(region, M, (cols, rows), 
+    # Выходной размер = размер входной области
+    rotated = cv2.warpAffine(region, M, (rw, rh), 
                             flags=cv2.INTER_LANCZOS4,
-                            borderMode=cv2.BORDER_REPLICATE) 
+                            borderMode=cv2.BORDER_REPLICATE)
     
-    img_current[y1:y2, x1:x2] = rotated
+    # Записываем ТОЛЬКО обратно в выделенную область
+    img_current[y:y+rh, x:x+rw] = rotated
     img_gray = cv2.cvtColor(img_current, cv2.COLOR_BGR2GRAY)
-    print(f"CUBE ROTATED {center} by {angle_deg}°")
+    print(f"🎯 КУБ ПОВЕРНУТ ({x},{y}) {rw}x{rh} на {angle_deg}°")
 
 def global_rotate(angle_deg):
-    global img_current, img_gray, angle   
+    global img_current, img_gray, angle    
     center = (w // 2, h // 2)
     M = cv2.getRotationMatrix2D(center, angle + angle_deg, 1.0)
     img_current = cv2.warpAffine(img_original, M, (w, h), 
@@ -88,34 +62,56 @@ def global_rotate(angle_deg):
                                 borderValue=(0, 0, 0)) 
     img_gray = cv2.cvtColor(img_current, cv2.COLOR_BGR2GRAY)
     angle += angle_deg
-    print(f"GLOBAL ROTATION {angle:.1f}° - NO MIRRORING!")
+    print(f"🌍 ГЛОБАЛЬНЫЙ ПОВОРОТ {angle:.1f}°")
 
 def mouse_callback(event, x, y, flags, param):
-    global selected_point, selection_rect
+    global drawing_rect, rect_start, selected_rect, current_mouse_pos
     
-    if event == cv2.EVENT_LBUTTONDOWN:
-        min_dist = float('inf')
-        closest = None
-        for point in grid_points:
-            dist = ((point[0]-x)**2 + (point[1]-y)**2)**0.5
-            if dist < 25 and dist < min_dist:
-                min_dist = dist
-                closest = point
-        
-        if closest:
-            selected_point = closest
-            half = GRID_STEP // 2
-            selection_rect = (closest[0]-half, closest[1]-half, GRID_STEP, GRID_STEP)
-            print(f"CUBE SELECTED: {closest}")
-        else:
-            selected_point = None
-            selection_rect = None
-            print("No cube selected")
+    current_mouse_pos = (x, y)
     
-    elif event == cv2.EVENT_RBUTTONDOWN:
-        selected_point = None
-        selection_rect = None
-        print("FOCUS CLEARED!")
+    if event == cv2.EVENT_RBUTTONDOWN:
+        drawing_rect = True
+        rect_start = (x, y)
+        selected_rect = None
+        print(f"🖱️ Начало выделения ({x}, {y})")
+    
+    elif event == cv2.EVENT_MOUSEMOVE:
+        pass  # current_mouse_pos уже обновлен
+    
+    elif event == cv2.EVENT_RBUTTONUP:
+        if drawing_rect:
+            drawing_rect = False
+            x1, y1 = rect_start
+            x2, y2 = x, y
+            rw = abs(x2 - x1)
+            rh = abs(y2 - y1)
+            
+            if rw > 15 and rh > 15:
+                selected_rect = (min(x1,x2), min(y1,y2), rw, rh)
+                print(f"✅ КУБ СОЗДАН: {selected_rect}")
+            else:
+                print("❌ Куб слишком мал (мин 15x15)")
+    
+    elif event == cv2.EVENT_LBUTTONDOWN:
+        selected_rect = None
+        print("🔄 Выделение снято")
+
+def draw_overlay(img):
+    overlay = img.copy()
+    
+    # Растягиваемый прямоугольник (зеленый)
+    if drawing_rect and rect_start[0] > 0:
+        x1, y1 = rect_start
+        x2, y2 = current_mouse_pos
+        cv2.rectangle(overlay, (min(x1,x2), min(y1,y2)), (max(x1,x2), max(y1,y2)), (0, 255, 0), 3)
+    
+    # Активный куб (красный)
+    if selected_rect:
+        x, y, rw, rh = selected_rect
+        cv2.rectangle(overlay, (x, y), (x+rw, y+rh), (0, 0, 255), 3)
+        cv2.putText(overlay, "АКТИВЕН", (x+5, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+    
+    return overlay
 
 def ocr_process():
     gray = cv2.cvtColor(img_current, cv2.COLOR_BGR2GRAY)
@@ -131,51 +127,63 @@ def ocr_process():
     
     return text, thresh
 
-grid_points = create_grid_points()
-cv2.namedWindow('Grid Tool', cv2.WINDOW_NORMAL)
-cv2.setMouseCallback('Grid Tool', mouse_callback)
+cv2.namedWindow('Resizable Cube OCR Tool', cv2.WINDOW_NORMAL)
+cv2.setMouseCallback('Resizable Cube OCR Tool', mouse_callback)
+
+print("🎮 УПРАВЛЕНИЕ:")
+print("  🖱️ ПКМ + ТЯНИ = создать куб любого размера")
+print("  🔴 A/D = повернуть АКТИВНЫЙ куб")
+print("  🖱️ ЛКМ = снять выделение | S/ENTER = OCR | ESC = выход")
 
 while True:
-    grid_points = create_grid_points()
+    display = draw_overlay(img_current)
     
-    display = draw_grid(img_current, selected_point)
+    if drawing_rect:
+        status = "🖱️ ТЯНИ ПКМ"
+        color = (0, 255, 0)
+    elif selected_rect:
+        x, y, rw, rh = selected_rect
+        status = f"🔴 АКТИВЕН {rw}x{rh}"
+        color = (0, 0, 255)
+    else:
+        status = "🖱️ ПКМ + ТЯНИ"
+        color = (0, 255, 255)
     
-    status = "CUBE ACTIVE" if selected_point else "FREE MODE"
-    cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    cv2.putText(display, f"Angle: {angle:.1f}°", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+    cv2.putText(display, f"Угол: {angle:.1f}° | Мышь: {current_mouse_pos[0]},{current_mouse_pos[1]}", 
+                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     
-    cv2.imshow('Grid Tool', display)
+    cv2.imshow('Resizable Cube OCR Tool', display)
     
     key = cv2.waitKey(20) & 0xFF
     
-    if selected_point is not None:
-        if key == ord('a') or key == ord('A'):
-            rotate_region_around_point(selected_point, -10)
-        elif key == ord('d') or key == ord('D'):
-            rotate_region_around_point(selected_point, 10)
-    
-    elif key == ord('a') or key == ord('A'):
+    if selected_rect and (key == ord('a') or key == ord('A')):
+        rotate_region_around_rect(selected_rect, -10)
+    elif selected_rect and (key == ord('d') or key == ord('D')):
+        rotate_region_around_rect(selected_rect, 10)
+    elif not selected_rect and (key == ord('a') or key == ord('A')):
         global_rotate(-10)
-    elif key == ord('d') or key == ord('D'):
+    elif not selected_rect and (key == ord('d') or key == ord('D')):
         global_rotate(10)
     
     elif key == 13:  # ENTER
-        print("ENTER: Saving final.jpg...")
+        print("💾 Сохранение final.jpg...")
         cv2.imwrite('final.jpg', img_current)
         text, thresh = ocr_process()
-        print("OCR result:", repr(text[:200]))
+        print("📄 OCR:", repr(text[:200]))
+        if 'OCR Preview' in cv2.getWindowProperty('OCR Preview', 0) >= 0:
+            cv2.destroyWindow('OCR Preview')
         cv2.imshow('OCR Preview', thresh)
         cv2.waitKey(0)
-        cv2.destroyWindow('OCR Preview')
     
-    elif key == ord('s') or key == ord('S'):  # S
+    elif key == ord('s') or key == ord('S'):
         text, thresh = ocr_process()
-        print("OCR result:", repr(text[:200]))
+        print("📄 Быстрый OCR:", repr(text[:200]))
         cv2.imshow('OCR Preview', thresh)
         cv2.waitKey(0)
-        cv2.destroyWindow('OCR Preview')
     
     elif key == 27:  # ESC
         break
 
 cv2.destroyAllWindows()
+print("👋 Готово!")
