@@ -5,12 +5,13 @@ import pytesseract
 import sys
 import io
 import time
+import math
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
-FILE_NAME = r'C:\Users\user\Desktop\pydiplom\OCRWithGrid\englishPhoto.jpg'
+pytesseract.pytesseract.tesseract_cmd = r'D:\\tesseract\\tesseract.exe'
+FILE_NAME = r'C:\\Users\\user\\Desktop\\pydiplom\\OCRWithGrid\\englishPhoto.jpg'
 
 img_original = cv2.imread(FILE_NAME)
 if img_original is None:
@@ -26,6 +27,7 @@ angle = 0
 # Operating modes
 MODE_GRID_AUTO = 0
 MODE_GRID_MANUAL = 1
+MODE_DISTORT = 2
 current_mode = MODE_GRID_MANUAL
 
 cubes = []
@@ -39,22 +41,33 @@ selected_point = None
 selection_rect = None
 grid_rotations = {}
 
+# Distortion correction variables
+distort_mode_active = False
+drag_start = (0, 0)
+drag_offset = np.array([0.0, 0.0])
+perspective_corners = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
+selected_corner_idx = -1
+dragging_corner_idx = -1
+
 # Top control panel (buttons)
-PANEL_TOP_HEIGHT = 80
-BUTTON_HEIGHT = 60
+PANEL_BOTTOM_HEIGHT = 70  
+PANEL_MARGIN = 5
+BUTTON_HEIGHT = 50
 PANEL_RIGHT_WIDTH = 150
 
 buttons = {
-    'rotate_left': {'x': 10, 'y': 10, 'w': 80, 'h': BUTTON_HEIGHT, 'text': '<-10'},
-    'rotate_right': {'x': 100, 'y': 10, 'w': 80, 'h': BUTTON_HEIGHT, 'text': '10->'},
-    'delete': {'x': 190, 'y': 10, 'w': 80, 'h': BUTTON_HEIGHT, 'text': 'Delete'},
-    'ocr': {'x': 280, 'y': 10, 'w': 80, 'h': BUTTON_HEIGHT, 'text': 'OCR'},
-    'reset': {'x': 370, 'y': 10, 'w': 80, 'h': BUTTON_HEIGHT, 'text': 'Reset'}
+    'rotate_left': {'x': 10, 'y': 10, 'w': 70, 'h': BUTTON_HEIGHT, 'text': '<-10'},
+    'rotate_right': {'x': 85, 'y': 10, 'w': 70, 'h': BUTTON_HEIGHT, 'text': '10->'},
+    'delete': {'x': 160, 'y': 10, 'w': 70, 'h': BUTTON_HEIGHT, 'text': 'Delete'},
+    'ocr': {'x': 235, 'y': 10, 'w': 70, 'h': BUTTON_HEIGHT, 'text': 'OCR'},
+    'reset': {'x': 310, 'y': 10, 'w': 70, 'h': BUTTON_HEIGHT, 'text': 'Reset'}
 }
 
+# ✅ КНОПКИ ПЕРЕМЕЩЕНЫ ВНИЗ (отступ от INFO панели)
 NAV_BUTTONS = {
-    'grid_auto': {'y': 10, 'h': 60, 'text': 'Auto Grid'},
-    'grid_manual': {'y': 80, 'h': 60, 'text': 'Manual Grid'}
+    'grid_auto': {'y': 210, 'h': BUTTON_HEIGHT, 'text': 'Auto Grid'},
+    'grid_manual': {'y': 270, 'h': BUTTON_HEIGHT, 'text': 'Manual Grid'},
+    'distort': {'y': 330, 'h': BUTTON_HEIGHT, 'text': 'Perspective'}
 }
 
 button_pressed = None
@@ -123,6 +136,25 @@ def global_rotate(angle_deg):
     img_gray = cv2.cvtColor(img_current, cv2.COLOR_BGR2GRAY)
     angle += angle_deg
 
+# ✅ ИСПРАВЛЕННАЯ ПЕРСПЕКТИВА - src_pts = ИСКАЖЕННЫЕ, dst_pts = ИДЕАЛЬНЫЕ
+def apply_perspective_transform():
+    global img_current, img_gray
+    src_pts = perspective_corners.copy()  # ✅ Что БЫЛО (искаженные углы)
+    dst_pts = np.float32([[0,0], [w-1,0], [w-1,h-1], [0,h-1]])  # ✅ Что ДОЛЖНО БЫТЬ
+    
+    # Проверка на совпадение точек
+    if len(np.unique(src_pts.reshape(-1), axis=0)) < 4:
+        return
+        
+    try:
+        M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+        img_current = cv2.warpPerspective(img_original, M, (w, h), 
+                                        flags=cv2.INTER_LINEAR,
+                                        borderMode=cv2.BORDER_REPLICATE)
+        img_gray = cv2.cvtColor(img_current, cv2.COLOR_BGR2GRAY)
+    except:
+        print("Perspective transform failed")
+
 def clear_cubes():
     global cubes, selected_cube_idx
     cubes.clear()
@@ -131,32 +163,99 @@ def clear_cubes():
 
 def reset_all():
     global cubes, grid_points, selected_cube_idx, selected_point, img_current, img_gray, angle, button_pressed, grid_rotations, selection_rect
+    global distort_mode_active, drag_offset, perspective_corners, selected_corner_idx, dragging_corner_idx
     cubes.clear()
     grid_rotations.clear()
     grid_points = []
     selected_cube_idx = -1
     selected_point = None
     selection_rect = None
+    distort_mode_active = False
+    drag_offset = np.array([0.0, 0.0])
+    perspective_corners = np.array([[0,0],[w,0],[w,h],[0,h]], dtype=np.float32)
+    selected_corner_idx = -1
+    dragging_corner_idx = -1
     img_current = img_original.copy()
     img_gray = cv2.cvtColor(img_current, cv2.COLOR_BGR2GRAY)
     angle = 0
     button_pressed = None
     print("Reset all!")
 
+# ✅ ПРАВАЯ ПАНЕЛЬ - INFO ВВЕРХУ, КНОПКИ НИЖЕ
 def draw_right_panel(combined):
     panel_x = w_orig
-    panel_y = 0
+    img_height = h_orig
     
-    cv2.rectangle(combined, (panel_x, panel_y), (panel_x + PANEL_RIGHT_WIDTH, h_orig + PANEL_TOP_HEIGHT), (60, 60, 60), -1)
+    cv2.rectangle(combined, (panel_x, 0), (panel_x + PANEL_RIGHT_WIDTH, img_height + PANEL_BOTTOM_HEIGHT), (60, 60, 60), -1)
     
-    cv2.rectangle(combined, (panel_x + 5, 5), (panel_x + PANEL_RIGHT_WIDTH - 5, 35), (0, 0, 0), -1)
-    cv2.putText(combined, "MODES", (panel_x + 10, 25), 
+    # ✅ INFO БЛОК (вверху)
+    info_y = 10
+    cv2.rectangle(combined, (panel_x + 5, info_y - 5), (panel_x + PANEL_RIGHT_WIDTH - 5, info_y + 130), (40, 40, 40), -1)
+    cv2.rectangle(combined, (panel_x + 5, info_y - 5), (panel_x + PANEL_RIGHT_WIDTH - 5, info_y + 130), (100, 100, 100), 1)
+    
+    cv2.putText(combined, "INFO", (panel_x + 10, info_y + 12), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+    
+    info_y += 28
+    mode_text = "AUTO" if current_mode == MODE_GRID_AUTO else "MANUAL" if current_mode == MODE_GRID_MANUAL else "DISTORT"
+    cv2.putText(combined, f"Mode: {mode_text}", (panel_x + 10, info_y), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+    info_y += 22
+    
+    if current_mode != MODE_DISTORT:
+        cv2.putText(combined, f"Cubes: {len(cubes)}", (panel_x + 10, info_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        info_y += 22
+        
+        if selected_cube_idx >= 0:
+            cube = cubes[selected_cube_idx]
+            cv2.putText(combined, f"#{selected_cube_idx}: {cube[2]}x{cube[3]}", (panel_x + 10, info_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 255, 255), 1)
+            info_y += 22
+        elif selected_point:
+            pt_text = f"Point: {selected_point[0]:.0f},{selected_point[1]:.0f}"
+            cv2.putText(combined, pt_text, (panel_x + 10, info_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 255, 0), 1)
+            info_y += 22
+        
+        cv2.putText(combined, f"Angle: {angle:.1f}°", (panel_x + 10, info_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+    else:
+        cv2.putText(combined, f"Points: 4", (panel_x + 10, info_y), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+        info_y += 22
+        
+        if selected_corner_idx >= 0:
+            corner = perspective_corners[selected_corner_idx]
+            cv2.putText(combined, f"#{selected_corner_idx}: {corner[0]:.0f},{corner[1]:.0f}", 
+                       (panel_x + 10, info_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 255, 255), 1)
+            info_y += 22
+            
+            distances = []
+            for i in range(4):
+                if i != selected_corner_idx:
+                    dist = math.hypot(corner[0]-perspective_corners[i][0], 
+                                    corner[1]-perspective_corners[i][1])
+                    distances.append(f"{dist:.0f}")
+            cv2.putText(combined, f"Dists: {distances[0]} {distances[1]} {distances[2]}", 
+                       (panel_x + 10, info_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.28, (0, 255, 0), 1)
+        else:
+            cv2.putText(combined, "LMB+Drag corners", (panel_x + 10, info_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 255, 255), 1)
+    
+    # ✅ MODES ЗАГОЛОВОК (между INFO и кнопками)
+    cv2.rectangle(combined, (panel_x + 5, 155), (panel_x + PANEL_RIGHT_WIDTH - 5, 185), (0, 0, 0), -1)
+    cv2.putText(combined, "MODES", (panel_x + 10, 172), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     
+    # ✅ КНОПКИ РЕЖИМОВ (ниже)
     for btn_name, btn in NAV_BUTTONS.items():
-        btn_y = PANEL_TOP_HEIGHT + btn['y']
+        btn_y = btn['y']
         is_active = (btn_name == 'grid_auto' and current_mode == MODE_GRID_AUTO) or \
-                   (btn_name == 'grid_manual' and current_mode == MODE_GRID_MANUAL)
+                   (btn_name == 'grid_manual' and current_mode == MODE_GRID_MANUAL) or \
+                   (btn_name == 'distort' and current_mode == MODE_DISTORT)
         color = (120, 120, 120) if is_active else (80, 80, 80)
         
         cv2.rectangle(combined, (panel_x + 10, btn_y), 
@@ -169,20 +268,18 @@ def draw_right_panel(combined):
         text_y = btn_y + (btn['h'] // 2) + (text_size[1] // 2)
         cv2.putText(combined, btn['text'], (int(text_x), int(text_y)), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255,255,255), 1)
-    
-    mode_text = "AUTO GRID" if current_mode == MODE_GRID_AUTO else "MANUAL GRID"
-    cv2.putText(combined, mode_text, (panel_x + 10, PANEL_TOP_HEIGHT + 160), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
 def mouse_callback(event, x, y, flags, param):
     global drawing_rect, rect_start, current_mouse_pos, selected_cube_idx, button_pressed, last_rotate_time
-    global selected_point, selection_rect, current_mode, grid_points
+    global selected_point, selection_rect, current_mode, grid_points, distort_mode_active
+    global drag_start, drag_offset, perspective_corners, selected_corner_idx, dragging_corner_idx
     
     current_time = time.time()
     
+    # Обработка клика по правой панели (режимы)
     sidebar_x = w_orig
-    if event == cv2.EVENT_LBUTTONDOWN and x >= sidebar_x and y >= PANEL_TOP_HEIGHT:
-        panel_y = y - PANEL_TOP_HEIGHT
+    if event == cv2.EVENT_LBUTTONDOWN and x >= sidebar_x:
+        panel_y = y
         for btn_name, btn in NAV_BUTTONS.items():
             if (btn['y'] <= panel_y <= btn['y'] + btn['h']):
                 old_mode = current_mode
@@ -193,11 +290,16 @@ def mouse_callback(event, x, y, flags, param):
                 elif btn_name == 'grid_manual':
                     current_mode = MODE_GRID_MANUAL
                     print("MODE: MANUAL GRID")
-                
+                elif btn_name == 'distort':
+                    current_mode = MODE_DISTORT
+                    distort_mode_active = True
+                    print("MODE: DISTORT FIX - LMB+Drag corners!")
+                    
                 if old_mode != current_mode:
                     clear_cubes()
                 return
     
+    # Обработка клика по нижней панели кнопок
     if event == cv2.EVENT_LBUTTONDOWN and y >= h_orig:
         panel_y = y - h_orig
         clicked_button = None
@@ -234,6 +336,9 @@ def mouse_callback(event, x, y, flags, param):
     
     elif event == cv2.EVENT_LBUTTONUP:
         button_pressed = None
+        if dragging_corner_idx != -1:
+            dragging_corner_idx = -1
+            print("Drag finished")
         return
     
     elif event == cv2.EVENT_MOUSEMOVE and button_pressed and (flags & cv2.EVENT_FLAG_LBUTTON):
@@ -248,12 +353,24 @@ def mouse_callback(event, x, y, flags, param):
             last_rotate_time = current_time
         return
     
+    # ОСНОВНАЯ ЛОГИКА
     if x < w_orig and y < h_orig:
         current_mouse_pos = (x, y)
         
         if event == cv2.EVENT_LBUTTONDOWN:
             selected_cube_idx = -1
             selected_point = None
+            
+            # ✅ DISTORT MODE - LMB = ПЕРЕТАСКИВАНИЕ
+            if current_mode == MODE_DISTORT:
+                for i, corner in enumerate(perspective_corners):
+                    if math.hypot(corner[0]-x, corner[1]-y) < 20:  # ✅ Меньший радиус захвата
+                        drag_start = np.array([x, y])
+                        drag_offset = corner - np.array([x, y])
+                        dragging_corner_idx = i
+                        selected_corner_idx = i
+                        print(f"🔥 DRAG START corner {i}")
+                        return
             
             if current_mode == MODE_GRID_MANUAL:
                 for i, cube in enumerate(cubes):
@@ -262,7 +379,7 @@ def mouse_callback(event, x, y, flags, param):
                         selected_cube_idx = i
                         break
             
-            if selected_cube_idx == -1 and current_mode == MODE_GRID_AUTO:
+            elif current_mode == MODE_GRID_AUTO:
                 min_dist = float('inf')
                 for point in grid_points:
                     dist = ((point[0]-x)**2 + (point[1]-y)**2)**0.5
@@ -272,6 +389,13 @@ def mouse_callback(event, x, y, flags, param):
                 if selected_point:
                     half = GRID_STEP // 2
                     selection_rect = (selected_point[0]-half, selected_point[1]-half, GRID_STEP, GRID_STEP)
+        
+        # ✅ ПЕРЕТАСКИВАНИЕ УГЛА (картинка деформируется)
+        elif current_mode == MODE_DISTORT and dragging_corner_idx != -1 and (flags & cv2.EVENT_FLAG_LBUTTON):
+            current_pos = np.array([x, y])
+            perspective_corners[dragging_corner_idx] = current_pos + drag_offset
+            apply_perspective_transform()  # ✅ ПРИМЕНЯЕМ ПЕРСПЕКТИВУ КАЖДЫЙ РАЗ
+            return
         
         if current_mode == MODE_GRID_MANUAL:
             if event == cv2.EVENT_RBUTTONDOWN:
@@ -291,26 +415,15 @@ def mouse_callback(event, x, y, flags, param):
 
 def draw_combined_image(img):
     combined_width = w_orig + PANEL_RIGHT_WIDTH
-    combined = np.zeros((h_orig + PANEL_TOP_HEIGHT, combined_width, 3), dtype=np.uint8)
+    combined_height = h_orig + PANEL_BOTTOM_HEIGHT
+    
+    combined = np.zeros((combined_height, combined_width, 3), dtype=np.uint8)
     
     combined[:h_orig, :w_orig, :] = img
     
-    status_parts = [f"Mode: {'AUTO' if current_mode == MODE_GRID_AUTO else 'MANUAL'}"]
-    status_parts.append(f"Cubes: {len(cubes)}")
-    if selected_cube_idx >= 0:
-        cube = cubes[selected_cube_idx]
-        status_parts.append(f"#{selected_cube_idx}: {cube[2]}x{cube[3]}")
-    elif selected_point:
-        status_parts.append(f"Point: {selected_point}")
-    status_parts.append(f"Angle: {angle:.1f}°")
-    status = " | ".join(status_parts)
-    
-    cv2.rectangle(combined, (5, 5), (w_orig-10, 35), (0, 0, 0), -1)
-    cv2.putText(combined, status, (10, 25), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    
     panel_y = h_orig
-    cv2.rectangle(combined, (0, panel_y), (w_orig, h_orig + PANEL_TOP_HEIGHT), (70, 70, 70), -1)
+    cv2.rectangle(combined, (0, panel_y), 
+                 (w_orig, panel_y + PANEL_BOTTOM_HEIGHT), (70, 70, 70), -1)
     
     for btn_name, btn in buttons.items():
         btn_y = panel_y + btn['y']
@@ -363,6 +476,38 @@ def draw_overlay(img):
             x, y, rw, rh = selection_rect
             cv2.rectangle(overlay, (x, y), (x+rw, y+rh), (0, 0, 255), 2)
     
+    # ✅ DISTORT MODE - ТОЧКИ МЕНЬШЕ
+    if current_mode == MODE_DISTORT:
+        for i, corner in enumerate(perspective_corners):
+            corner_int = tuple(corner.astype(int))
+            
+            # 🟡 ЖЕЛТЫЙ = ПЕРЕТАСКИВАЕМЫЙ (18px + кольцо)
+            if i == dragging_corner_idx:
+                color = (0, 255, 255)
+                size = 18
+                cv2.circle(overlay, corner_int, size+5, color, 2)
+            # 🤍 БЕЛЫЙ = ВЫБРАННЫЙ (16px)
+            elif i == selected_corner_idx:
+                color = (255, 255, 255)
+                size = 16
+            # 🟢 ЗЕЛЕНЫЙ = ОБЫЧНЫЙ (12px)
+            else:
+                color = (0, 255, 0)
+                size = 12
+            
+            cv2.circle(overlay, corner_int, size, color, -1)
+            cv2.circle(overlay, corner_int, size, (0, 0, 0), 2)  # ✅ Тонкий border
+            cv2.putText(overlay, str(i), corner_int, 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2,
+                       cv2.LINE_AA)
+        
+        # Красные линии между углами
+        pts = perspective_corners.astype(int)
+        cv2.line(overlay, tuple(pts[0]), tuple(pts[1]), (0, 0, 255), 3)
+        cv2.line(overlay, tuple(pts[1]), tuple(pts[2]), (0, 0, 255), 3)
+        cv2.line(overlay, tuple(pts[2]), tuple(pts[3]), (0, 0, 255), 3)
+        cv2.line(overlay, tuple(pts[3]), tuple(pts[0]), (0, 0, 255), 3)
+    
     if current_mode == MODE_GRID_MANUAL and drawing_rect and rect_start[0] > 0:
         x1, y1 = rect_start
         x2, y2 = current_mouse_pos
@@ -395,15 +540,9 @@ def ocr_process():
 
 grid_points = create_grid_points()
 
-cv2.namedWindow('Cube OCR Tool v1.6', cv2.WINDOW_NORMAL)
-cv2.setMouseCallback('Cube OCR Tool v1.6', mouse_callback)
-cv2.resizeWindow('Cube OCR Tool v1.6', w_orig + PANEL_RIGHT_WIDTH, h_orig + PANEL_TOP_HEIGHT)
-
-print("CONTROLS:")
-print("  Auto Grid: LMB=select point, A/D=rotate (FULL 360°!)")
-print("  Manual: RMB+Drag = cube, LMB = select cube")
-print("  Top buttons: HOLD LMB=continuous rotation")
-print("  ESC = Exit")
+cv2.namedWindow('Cube OCR Tool v2.2', cv2.WINDOW_NORMAL)
+cv2.setMouseCallback('Cube OCR Tool v2.2', mouse_callback)
+cv2.resizeWindow('Cube OCR Tool v2.2', w_orig + PANEL_RIGHT_WIDTH, h_orig + PANEL_BOTTOM_HEIGHT)
 
 while True:
     if current_mode == MODE_GRID_AUTO and not grid_points:
@@ -411,7 +550,7 @@ while True:
     
     display_img = draw_overlay(img_current)
     combined_img = draw_combined_image(display_img)
-    cv2.imshow('Cube OCR Tool v1.6', combined_img)
+    cv2.imshow('Cube OCR Tool v2.2', combined_img)
     
     key = cv2.waitKey(20) & 0xFF
     
