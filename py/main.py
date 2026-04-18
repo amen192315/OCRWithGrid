@@ -8,13 +8,15 @@ import pytesseract
 import time
 import sys
 
+
 # Настройка tesseract
 pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
+
 
 class OCRCorrector:
     def __init__(self, root):
         self.root = root
-        self.root.title("Устранение искажений сканированного текста (OCR Grid v2.2 - Clean)")
+        self.root.title("Устранение искажений сканированного текста (OCR Grid v2.6)")
         self.root.geometry("1600x1000")
         self.root.configure(bg='#1e1e1e')
         
@@ -24,7 +26,7 @@ class OCRCorrector:
         self.left_photo = None
         self.right_photo = None
         
-        # Переменные для всех режимов
+        # Переменные для режимов
         self.points = []
         self.base_points = []
         self.triangles = []
@@ -37,13 +39,28 @@ class OCRCorrector:
         # Perspective
         self.perspective_corners = None
         
-        # Geometry  
+        # Geometry 
         self.resize_corners = None
         
         self.image_offset_x = 0
         self.image_offset_y = 0
         
+        # НОВОЕ: Сохранение промежуточного результата
+        self.current_base_img = None
+        
         self.setup_ui()
+        
+        # НОВОЕ: Стартовый алерт
+        self.root.after(500, self.show_welcome_alert)
+
+    def show_welcome_alert(self):
+        """Приветственный алерт при запуске"""
+        messagebox.showinfo("🎉 Добро пожаловать!", 
+                           "📁 Выберите изображение для начала работы\n\n"
+                           "🛠 Режимы работы:\n"
+                           "🔳 Треугольная сетка - точная деформация\n"
+                           "📐 Перспектива 4 точки - исправление углов\n"
+                           "🎛 Геометрия + белый фон - кадрирование")
 
     def setup_ui(self):
         main_frame = ttk.Frame(self.root)
@@ -55,14 +72,15 @@ class OCRCorrector:
         
         ttk.Button(top_panel, text="📁 Загрузить изображение", command=self.load_image).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_panel, text="🔄 Сброс", command=self.reset_all).pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_panel, text="📝 OCR", command=self.run_ocr).pack(side=tk.LEFT, padx=5)
+        ttk.Button(top_panel, text="📝 OCR PRO", command=self.run_ocr).pack(side=tk.LEFT, padx=5)
         
         ttk.Separator(top_panel, orient='vertical').pack(side=tk.LEFT, padx=20, fill=tk.Y)
         
         ttk.Label(top_panel, text="Плотность сетки:").pack(side=tk.LEFT, padx=(0,5))
         self.grid_spin = ttk.Spinbox(top_panel, from_=1, to=7, width=5, textvariable=self.grid_size_var)
         self.grid_spin.pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_panel, text="📐 Инициализация сетки", command=self.init_grid).pack(side=tk.LEFT, padx=5)
+        self.grid_spin.bind('<Return>', lambda e: self.init_grid())  # НОВОЕ: автообновление при Enter
+        ttk.Button(top_panel, text="📐 Обновить сетку", command=self.init_grid).pack(side=tk.LEFT, padx=5)
         
         # Изображения
         img_frame = ttk.Frame(main_frame)
@@ -105,6 +123,11 @@ class OCRCorrector:
         mode = self.mode_var.get()
         print(f"🎛 РЕЖИМ ИЗМЕНЕН НА: {mode}")
         
+        # НОВОЕ: Сохранение текущего результата как базового изображения
+        if self.processed_img is not None and self.original_img is not None:
+            self.current_base_img = self.processed_img.copy()
+            print("💾 Текущий результат сохранен как базовое изображение")
+        
         if mode == 0:
             self.init_grid()
         elif mode == 1:
@@ -124,7 +147,11 @@ class OCRCorrector:
             if img is not None:
                 self.original_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 self.processed_img = self.original_img.copy()
+                self.current_base_img = None  # Сброс базового при новой загрузке
                 print(f"✅ Изображение загружено: {self.original_img.shape}")
+                messagebox.showinfo("✅ Изображение загружено!", 
+                                  f"Размер: {self.original_img.shape[1]}x{self.original_img.shape[0]}\n\n"
+                                  "🎯 Теперь выберите режим работы и начните редактирование!")
                 self.reset_all()
                 self.update_displays()
 
@@ -134,8 +161,11 @@ class OCRCorrector:
             print("❌ Нет изображения!")
             return
         
+        # НОВОЕ: Используем current_base_img если есть, иначе original_img
+        base_img = self.current_base_img if self.current_base_img is not None else self.original_img
+        
         n = min(self.grid_size_var.get(), 7)
-        h, w = self.original_img.shape[:2]
+        h, w = base_img.shape[:2]
         self.points = [[float(x), float(y)] for y in np.linspace(0, h, n + 1) for x in np.linspace(0, w, n + 1)]
         self.base_points = [p[:] for p in self.points]
         cols = n + 1
@@ -148,12 +178,15 @@ class OCRCorrector:
                 p4 = (j+1)*cols + i + 1
                 self.triangles.extend([(p1, p2, p3), (p2, p4, p3)])
         print(f"✅ Сетка создана: {len(self.points)} точек, {len(self.triangles)} треугольников")
-        self.process_warp()
+        self.process_warp(base_img=base_img)
 
     def init_perspective(self):
         print("📐 Инициализация перспективы...")
         if self.original_img is None: return
-        h, w = self.original_img.shape[:2]
+        
+        # НОВОЕ: Используем current_base_img если есть
+        base_img = self.current_base_img if self.current_base_img is not None else self.original_img
+        h, w = base_img.shape[:2]
         self.perspective_corners = np.array([
             [50, 50],
             [w-50, 50], 
@@ -161,12 +194,15 @@ class OCRCorrector:
             [50, h-50]
         ], dtype=np.float32)
         print(f"✅ Перспектива: {self.perspective_corners}")
-        self.apply_perspective_transform()
+        self.apply_perspective_transform(base_img=base_img)
 
     def init_geometry(self):
         print("🎛 Инициализация геометрии...")
         if self.original_img is None: return
-        h, w = self.original_img.shape[:2]
+        
+        # НОВОЕ: Используем current_base_img если есть
+        base_img = self.current_base_img if self.current_base_img is not None else self.original_img
+        h, w = base_img.shape[:2]
         offset = 40
         self.resize_corners = np.array([
             [offset, offset],
@@ -175,15 +211,15 @@ class OCRCorrector:
             [offset, h-offset-1]
         ], dtype=np.float32)
         print(f"✅ Геометрия: {self.resize_corners}")
-        self.apply_geometric_transform()
+        self.apply_geometric_transform(base_img=base_img)
 
-    def process_warp(self, quality=cv2.INTER_LINEAR):
+    def process_warp(self, base_img, quality=cv2.INTER_LINEAR):
         if not self.points or not self.triangles: 
-            self.processed_img = self.original_img.copy()
+            self.processed_img = base_img.copy()
             return
         
-        h, w = self.original_img.shape[:2]
-        out_img = np.full_like(self.original_img, 255)
+        h, w = base_img.shape[:2]
+        out_img = np.full_like(base_img, 255)
         
         for tri in self.triangles:
             src_pts = np.float32([self.points[i] for i in tri])
@@ -196,35 +232,35 @@ class OCRCorrector:
             mask = np.zeros((h, w), dtype=np.uint8)
             cv2.fillConvexPoly(mask, dst_pts.astype(np.int32), 255)
             
-            warped = cv2.warpAffine(self.original_img, M, (w, h), flags=quality)
+            warped = cv2.warpAffine(base_img, M, (w, h), flags=quality)
             out_img[mask == 255] = warped[mask == 255]
         
         self.processed_img = out_img
         print("🔳 Warp применен")
 
-    def apply_perspective_transform(self):
-        if self.original_img is None or self.perspective_corners is None: 
-            self.processed_img = self.original_img.copy()
+    def apply_perspective_transform(self, base_img):
+        if base_img is None or self.perspective_corners is None: 
+            self.processed_img = base_img.copy()
             return
         
-        h, w = self.original_img.shape[:2]
+        h, w = base_img.shape[:2]
         src_pts = self.perspective_corners
         dst_pts = np.float32([[0,0], [w-1,0], [w-1,h-1], [0,h-1]])
         
         try:
             M = cv2.getPerspectiveTransform(src_pts, dst_pts)
-            self.processed_img = cv2.warpPerspective(self.original_img, M, (w, h))
+            self.processed_img = cv2.warpPerspective(base_img, M, (w, h))
             print("📐 Перспектива применена")
         except Exception as e:
             print(f"❌ Перспектива ошибка: {e}")
-            self.processed_img = self.original_img.copy()
+            self.processed_img = base_img.copy()
 
-    def apply_geometric_transform(self):
-        if self.original_img is None or self.resize_corners is None:
-            self.processed_img = self.original_img.copy()
+    def apply_geometric_transform(self, base_img):
+        if base_img is None or self.resize_corners is None:
+            self.processed_img = base_img.copy()
             return
         
-        h, w = self.original_img.shape[:2]
+        h, w = base_img.shape[:2]
         src_corners = np.float32([[0,0], [w-1,0], [w-1,h-1], [0,h-1]])
         dst_corners = self.resize_corners
         
@@ -232,7 +268,7 @@ class OCRCorrector:
         
         try:
             M = cv2.getPerspectiveTransform(src_corners, dst_corners)
-            deformed = cv2.warpPerspective(self.original_img, M, (w, h), 
+            deformed = cv2.warpPerspective(base_img, M, (w, h), 
                                         flags=cv2.INTER_CUBIC,
                                         borderMode=cv2.BORDER_CONSTANT, 
                                         borderValue=(255,255,255))
@@ -246,7 +282,7 @@ class OCRCorrector:
             print("🎛 Геометрия применена")
         except Exception as e:
             print(f"❌ Геометрия ошибка: {e}")
-            self.processed_img = self.original_img.copy()
+            self.processed_img = base_img.copy()
 
     def on_click(self, event):
         print(f"🖱 Клик: {event.x}, {event.y}")
@@ -266,7 +302,6 @@ class OCRCorrector:
                     self.dragging_idx = i
                     print(f"🔸 Захвачена точка сетки #{i}")
                     break
-                    
         elif mode == 1:  # Perspective
             for i in range(4):
                 corner = self.perspective_corners[i]
@@ -276,7 +311,6 @@ class OCRCorrector:
                     self.dragging_idx = i
                     print(f"📐 Захвачен угол перспективы #{i}")
                     break
-        
         elif mode == 2:  # Geometry
             for i in range(4):
                 corner = self.resize_corners[i]
@@ -301,17 +335,17 @@ class OCRCorrector:
         
         mode = self.mode_var.get()
         
+        base_img = self.current_base_img if self.current_base_img is not None else self.original_img
+        
         if mode == 0:  # Grid
             self.points[self.dragging_idx] = [nx, ny]
-            self.process_warp(cv2.INTER_NEAREST)
-            
+            self.process_warp(base_img, cv2.INTER_NEAREST)
         elif mode == 1:  # Perspective
             self.perspective_corners[self.dragging_idx] = [nx, ny]
-            self.apply_perspective_transform()
-            
+            self.apply_perspective_transform(base_img)
         elif mode == 2:  # Geometry
             self.resize_corners[self.dragging_idx] = [nx, ny]
-            self.apply_geometric_transform()
+            self.apply_geometric_transform(base_img)
         
         self.update_displays()
 
@@ -321,12 +355,14 @@ class OCRCorrector:
             self.dragging_idx = None
             
             mode = self.mode_var.get()
+            base_img = self.current_base_img if self.current_base_img is not None else self.original_img
+            
             if mode == 0:
-                self.process_warp(cv2.INTER_LINEAR)
+                self.process_warp(base_img, cv2.INTER_LINEAR)
             elif mode == 1:
-                self.apply_perspective_transform()
+                self.apply_perspective_transform(base_img)
             elif mode == 2:
-                self.apply_geometric_transform()
+                self.apply_geometric_transform(base_img)
             
             self.update_displays()
 
@@ -346,7 +382,7 @@ class OCRCorrector:
         self.image_offset_x = max(0, (self.left_canvas.winfo_width() - w*scale) // 2)
         self.image_offset_y = max(0, (self.left_canvas.winfo_height() - h*scale) // 2)
 
-        # ✅ ЛЕВАЯ ПАНЕЛЬ - всегда исходник + наложение
+        # ЛЕВАЯ ПАНЕЛЬ - всегда исходник + наложение
         img_left = cv2.resize(self.original_img, (int(w*scale), int(h*scale)))
         self.left_photo = ImageTk.PhotoImage(Image.fromarray(img_left))
         self.left_canvas.delete("all")
@@ -355,7 +391,7 @@ class OCRCorrector:
                                     image=self.left_photo)
         self.draw_overlay(scale)
 
-        # ✅ ПРАВАЯ ПАНЕЛЬ - всегда результат
+        # ПРАВАЯ ПАНЕЛЬ - всегда результат
         if self.processed_img is not None:
             rw, rh = self.right_canvas.winfo_width(), self.right_canvas.winfo_height()
             rscale = min(rw/w, rh/h) * 0.9
@@ -393,16 +429,16 @@ class OCRCorrector:
                 size = 15 if self.dragging_idx == len(corners)-1 else 10
                 fill_col = "#ffff44" if self.dragging_idx == len(corners)-1 else "#44ff44"
                 self.left_canvas.create_oval(sx-size, sy-size, sx+size, sy+size, 
-                                          fill=fill_col, outline="black", width=2)
+                                        fill=fill_col, outline="black", width=2)
                 self.left_canvas.create_text(sx, sy-20, text=str(len(corners)-1), 
-                                          fill="black", font=("Arial", 12, "bold"))
+                                        fill="black", font=("Arial", 12, "bold"))
             
             # Соединяем углы
             for i in range(4):
                 j = (i + 1) % 4
                 self.left_canvas.create_line(corners[i][0], corners[i][1], 
-                                          corners[j][0], corners[j][1], 
-                                          fill="#ffaa00", width=4)
+                                        corners[j][0], corners[j][1], 
+                                        fill="#ffaa00", width=4)
         
         elif mode == 2 and self.resize_corners is not None:
             corners = []
@@ -414,16 +450,16 @@ class OCRCorrector:
                 size = 18 if self.dragging_idx == i else 12
                 fill_col = "#ffaa00" if self.dragging_idx == i else "#aaff00"
                 self.left_canvas.create_oval(sx-size, sy-size, sx+size, sy+size, 
-                                          fill=fill_col, outline="black", width=3)
+                                        fill=fill_col, outline="black", width=3)
                 self.left_canvas.create_text(sx, sy-25, text=str(i), 
-                                          fill="white", font=("Arial", 14, "bold"))
+                                        fill="white", font=("Arial", 14, "bold"))
             
             # Красные толстые линии
             for i in range(4):
                 j = (i + 1) % 4
                 self.left_canvas.create_line(corners[i][0], corners[i][1], 
-                                          corners[j][0], corners[j][1], 
-                                          fill="#ff4400", width=6)
+                                        corners[j][0], corners[j][1], 
+                                        fill="#ff4400", width=6)
 
     def reset_all(self):
         self.points = []
@@ -432,6 +468,7 @@ class OCRCorrector:
         self.perspective_corners = None
         self.resize_corners = None
         self.dragging_idx = None
+        self.current_base_img = None
         if self.original_img is not None:
             self.processed_img = self.original_img.copy()
         print("🔄 СБРОС ВСЕГО")
@@ -445,32 +482,28 @@ class OCRCorrector:
         # Сохранение
         cv2.imwrite('final_corrected.jpg', cv2.cvtColor(self.processed_img, cv2.COLOR_RGB2BGR))
         
-        # OCR pipeline
+        # ✅ ПРОСТОЙ И КАЧЕСТВЕННЫЙ OCR PIPELINE
         gray = cv2.cvtColor(self.processed_img, cv2.COLOR_RGB2GRAY)
-        if np.mean(gray) > 200:  # Белый фон
-            gray = 255 - gray
-        
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray)
-        denoised = cv2.medianBlur(enhanced, 3)
-        binary = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                     cv2.THRESH_BINARY, 11, 2)
+        denoised = cv2.medianBlur(gray, 3)
+        _, binary = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
         cv2.imwrite('ocr_processed.jpg', binary)
         
         config = '--oem 3 --psm 6'
         text = pytesseract.image_to_string(Image.fromarray(binary), lang='eng', config=config)
+        text = text.strip()
         
         with open('ocr_result.txt', 'w', encoding='utf-8') as f:
-            f.write(text.strip())
+            f.write(text)
         
         print(f"✅ OCR: {len(text)} символов")
         messagebox.showinfo("OCR завершено!", 
-                          f"Файлы сохранены:\n"
-                          f"📁 final_corrected.jpg\n"
-                          f"📁 ocr_processed.jpg\n" 
-                          f"📄 ocr_result.txt\n\n"
-                          f"Первые 200 символов:\n{text[:200]}")
+                           f"Файлы сохранены:\n"
+                           f"📁 final_corrected.jpg\n"
+                           f"📁 ocr_processed.jpg\n"
+                           f"📄 ocr_result.txt\n\n"
+                           f"Текст:\n{text[:300]}...")
+
 
 if __name__ == "__main__":
     root = tk.Tk()
