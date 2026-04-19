@@ -6,12 +6,8 @@ import numpy as np
 from PIL import Image, ImageTk
 import pytesseract
 import time
-import sys
 
-
-# Настройка tesseract
 pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
-
 
 class OCRCorrector:
     def __init__(self, root):
@@ -79,8 +75,7 @@ class OCRCorrector:
         ttk.Label(top_panel, text="Плотность сетки:").pack(side=tk.LEFT, padx=(0,5))
         self.grid_spin = ttk.Spinbox(top_panel, from_=1, to=7, width=5, textvariable=self.grid_size_var)
         self.grid_spin.pack(side=tk.LEFT, padx=5)
-        self.grid_spin.bind('<Return>', lambda e: self.init_grid())  # НОВОЕ: автообновление при Enter
-        ttk.Button(top_panel, text="📐 Обновить сетку", command=self.init_grid).pack(side=tk.LEFT, padx=5)
+        self.grid_spin.bind('<Return>', lambda e: self.init_grid())  # Автообновление при Enter
         
         # Изображения
         img_frame = ttk.Frame(main_frame)
@@ -509,3 +504,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = OCRCorrector(root)
     root.mainloop()
+    
