@@ -13,8 +13,8 @@ pytesseract.pytesseract.tesseract_cmd = r'D:\\tesseract\\tesseract.exe'
 class OCRCorrector:
     def __init__(self, root):
         self.root = root
-        self.root.title("OCR Grid v3.5 ULTIMATE - Optimized & Protected")
-        self.root.geometry("1600x1000")
+        self.root.title("OCR Grid")
+        self.root.geometry("1920x1080")
         self.root.configure(bg='#1e1e1e')
         
         self.original_img = None
@@ -103,7 +103,7 @@ class OCRCorrector:
             ("🔳 Сетка", 0), 
             ("📐 Перспектива", 1), 
             ("🎛 Геометрия", 2), 
-            ("🔄 Ротация ячеек (A/D)", 3)
+            ("🔄 Ротация ячеек", 3)
         ]
         
         for text, mode_id in modes:
