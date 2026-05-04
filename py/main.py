@@ -8,7 +8,8 @@ import pytesseract
 import time
 import os
 
-pytesseract.pytesseract.tesseract_cmd = r'D:\\tesseract\\tesseract.exe'
+# Укажите правильный путь к tesseract.exe на вашем ПК
+pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
 
 class OCRCorrector:
     def __init__(self, root):
@@ -44,6 +45,9 @@ class OCRCorrector:
         self.grid_size_var = tk.StringVar(value="4")
         self.grid_mode_var = tk.StringVar(value="Треугольники")
         
+        # ДОБАВЛЕНО: Переменная для выбора языка OCR
+        self.ocr_lang_var = tk.StringVar(value="rus+eng") 
+        
         self.perspective_corners = None
         self.resize_corners = None
         
@@ -76,6 +80,12 @@ class OCRCorrector:
         ttk.Button(top_panel, text="🔄 Сброс", command=self.reset_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_panel, text="📝 OCR + Save", command=self.run_ocr).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_panel, text="💾 Сохранить фото", command=self.save_image).pack(side=tk.LEFT, padx=5)
+        
+        # ДОБАВЛЕНО: Выбор языка для OCR
+        ttk.Label(top_panel, text="Язык OCR:").pack(side=tk.LEFT, padx=(20, 5))
+        self.lang_combo = ttk.Combobox(top_panel, textvariable=self.ocr_lang_var, 
+                                       values=["rus+eng", "eng+rus", "rus", "eng"], width=10, state="readonly")
+        self.lang_combo.pack(side=tk.LEFT, padx=5)
         
         # Инпут сетки с защитой от букв
         ttk.Label(top_panel, text="Сетка:").pack(side=tk.LEFT, padx=(20,5))
@@ -442,12 +452,23 @@ class OCRCorrector:
         if not save_path: return
         try:
             gray = cv2.cvtColor(self.processed_img, cv2.COLOR_RGB2GRAY)
-            text = pytesseract.image_to_string(gray, lang='eng+rus')
-            with open(save_path, "w", encoding="utf-8") as f: f.write(text)
+            
+            # ДОБАВЛЕНО: получаем выбранный язык из выпадающего списка
+            selected_lang = self.ocr_lang_var.get()
+            
+            # Передаем язык в Tesseract
+            text = pytesseract.image_to_string(gray, lang=selected_lang)
+            
+            with open(save_path, "w", encoding="utf-8") as f: 
+                f.write(text)
             img_p = os.path.splitext(save_path)[0] + ".png"
             cv2.imwrite(img_p, cv2.cvtColor(self.processed_img, cv2.COLOR_RGB2BGR))
             messagebox.showinfo("Готово", "Текст и фото сохранены!")
-        except Exception as e: messagebox.showerror("Ошибка", str(e))
+        except pytesseract.TesseractError as e:
+            # ДОБАВЛЕНО: понятная ошибка, если языкового пакета нет
+            messagebox.showerror("Ошибка языкового пакета", f"Tesseract не смог найти файлы для языка '{selected_lang}'. Убедитесь, что скачали файл rus.traineddata в папку tessdata!\n\nОригинальная ошибка:\n{str(e)}")
+        except Exception as e: 
+            messagebox.showerror("Ошибка", str(e))
 
 if __name__ == "__main__":
     root = tk.Tk()
