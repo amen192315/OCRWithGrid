@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import cv2
@@ -8,7 +7,6 @@ import pytesseract
 import time
 import os
 
-# Укажите правильный путь к tesseract.exe на вашем ПК
 pytesseract.pytesseract.tesseract_cmd = r'D:\tesseract\tesseract.exe'
 
 class OCRCorrector:
@@ -23,20 +21,18 @@ class OCRCorrector:
         self.left_photo = None
         self.right_photo = None
         
-        # Данные сетки (Warp)
         self.points = []
         self.base_points = []
         self.triangles = []
         
-        # Настройки для разных режимов
         self.warp_grid_size = 4
         self.rotation_grid_size = 4
-        self.cell_angles = {} 
-        self.selected_cell = None 
+        self.cell_angles = {}
+        self.selected_cell = None
         
-        # Состояние мыши
         self.dragging_idx = None
         self.dragging_group = []
+        self.selected_points = set()
         self.last_mouse_x, self.last_mouse_y = 0, 0
         self.last_update_time = 0
         
@@ -45,10 +41,9 @@ class OCRCorrector:
         self.grid_mode_var = tk.StringVar(value="Треугольники")
         self.ocr_lang_var = tk.StringVar(value="rus+eng") 
         
-        # Переменные фильтров
         self.filter_type_var = tk.StringVar(value="Оригинал")
-        self.brightness_var = tk.DoubleVar(value=1.0) # Множитель яркости
-        self.contrast_var = tk.IntVar(value=0)       # Добавка контраста
+        self.brightness_var = tk.DoubleVar(value=1.0)
+        self.contrast_var = tk.IntVar(value=0)
         
         self.perspective_corners = None
         self.resize_corners = None
@@ -70,7 +65,6 @@ class OCRCorrector:
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # --- ПАНЕЛЬ УПРАВЛЕНИЯ ---
         top_panel = ttk.Frame(main_frame)
         top_panel.pack(fill=tk.X, pady=(0,10))
         
@@ -80,55 +74,51 @@ class OCRCorrector:
         ttk.Button(top_panel, text="💾 Сохранить фото", command=self.save_image).pack(side=tk.LEFT, padx=5)
         
         ttk.Label(top_panel, text="Язык OCR:").pack(side=tk.LEFT, padx=(20, 5))
-        self.lang_combo = ttk.Combobox(top_panel, textvariable=self.ocr_lang_var, 
+        self.lang_combo = ttk.Combobox(top_panel, textvariable=self.ocr_lang_var,
                                        values=["rus+eng", "eng+rus", "rus", "eng"], width=10, state="readonly")
         self.lang_combo.pack(side=tk.LEFT, padx=5)
         
         ttk.Label(top_panel, text="Сетка:").pack(side=tk.LEFT, padx=(20,5))
         vcmd = (self.root.register(self.validate_numeric), '%P')
-        self.grid_spin = ttk.Spinbox(top_panel, from_=1, to=30, width=5, textvariable=self.grid_size_var, 
+        self.grid_spin = ttk.Spinbox(top_panel, from_=1, to=30, width=5, textvariable=self.grid_size_var,
                                      validate='key', validatecommand=vcmd)
         self.grid_spin.pack(side=tk.LEFT, padx=5)
         self.grid_size_var.trace_add("write", lambda *args: self.on_grid_settings_change())
         
-        self.mode_combo = ttk.Combobox(top_panel, textvariable=self.grid_mode_var, 
+        self.mode_combo = ttk.Combobox(top_panel, textvariable=self.grid_mode_var,
                                        values=["Треугольники", "Квадраты"], width=12, state="readonly")
         self.mode_combo.pack(side=tk.LEFT, padx=5)
         self.mode_combo.bind("<<ComboboxSelected>>", lambda e: self.on_grid_settings_change())
 
-        # --- ПАНЕЛЬ ФИЛЬТРОВ И КОРРЕКЦИИ ---
         filter_panel = ttk.LabelFrame(main_frame, text="🛠 Обработка изображения")
         filter_panel.pack(fill=tk.X, pady=(5,0))
 
         ttk.Label(filter_panel, text="Фильтр OCR:").pack(side=tk.LEFT, padx=5)
-        self.filter_combo = ttk.Combobox(filter_panel, textvariable=self.filter_type_var, 
-                                         values=["Оригинал", "Ч/Б Адаптив", "Инверсия", "Резкость", "CLAHE Контраст"], 
+        self.filter_combo = ttk.Combobox(filter_panel, textvariable=self.filter_type_var,
+                                         values=["Оригинал", "Ч/Б Адаптив", "Инверсия", "Резкость", "CLAHE Контраст"],
                                          state="readonly", width=15)
         self.filter_combo.pack(side=tk.LEFT, padx=5)
         self.filter_combo.bind("<<ComboboxSelected>>", lambda e: self.update_displays())
 
-        # Ползунки яркости и контраста
         ttk.Label(filter_panel, text="Яркость:").pack(side=tk.LEFT, padx=(15, 5))
-        self.bright_scale = ttk.Scale(filter_panel, from_=0.5, to=2.5, variable=self.brightness_var, 
+        self.bright_scale = ttk.Scale(filter_panel, from_=0.5, to=2.5, variable=self.brightness_var,
                                       orient=tk.HORIZONTAL, length=100, command=lambda e: self.update_displays())
         self.bright_scale.pack(side=tk.LEFT, padx=5)
 
         ttk.Label(filter_panel, text="Контраст:").pack(side=tk.LEFT, padx=(15, 5))
-        self.contrast_scale = ttk.Scale(filter_panel, from_=-100, to=100, variable=self.contrast_var, 
+        self.contrast_scale = ttk.Scale(filter_panel, from_=-100, to=100, variable=self.contrast_var,
                                         orient=tk.HORIZONTAL, length=100, command=lambda e: self.update_displays())
         self.contrast_scale.pack(side=tk.LEFT, padx=5)
         
-        # --- ПАНЕЛЬ РЕЖИМОВ ГЕОМЕТРИИ ---
         mode_frame = ttk.LabelFrame(main_frame, text="Режим геометрии")
         mode_frame.pack(fill=tk.X, pady=(5,0))
         
         self.mode_var = tk.IntVar(value=0)
         modes = [("🔳 Сетка", 0), ("📐 Перспектива", 1), ("🎛 Геометрия", 2), ("🔄 Ротация ячеек", 3)]
         for text, mode_id in modes:
-            ttk.Radiobutton(mode_frame, text=text, variable=self.mode_var, 
-                          value=mode_id, command=self.on_mode_change).pack(side=tk.LEFT, padx=15, pady=5)
+            ttk.Radiobutton(mode_frame, text=text, variable=self.mode_var,
+                            value=mode_id, command=self.on_mode_change).pack(side=tk.LEFT, padx=15, pady=5)
 
-        # --- ХОЛСТЫ ---
         img_frame = ttk.Frame(main_frame)
         img_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
@@ -143,35 +133,29 @@ class OCRCorrector:
         self.right_canvas.pack(fill=tk.BOTH, expand=True)
         
         self.left_canvas.bind("<Button-1>", self.on_click)
+        self.left_canvas.bind("<Button-3>", self.on_right_click)
         self.left_canvas.bind("<B1-Motion>", self.on_drag)
         self.left_canvas.bind("<ButtonRelease-1>", self.on_release)
         self.left_canvas.bind("<Configure>", lambda e: self.update_displays())
 
     def apply_filters(self, img):
-        """Применяет выбранный фильтр и настройки яркости/контраста"""
-        if img is None: return None
+        if img is None:
+            return None
         res = img.copy()
-
-        # 1. Ручная коррекция яркости и контраста
         alpha = self.brightness_var.get()
         beta = self.contrast_var.get()
         res = cv2.convertScaleAbs(res, alpha=alpha, beta=beta)
-
-        # 2. Применение спец-фильтров
         f_type = self.filter_type_var.get()
         
         if f_type == "Ч/Б Адаптив":
             gray = cv2.cvtColor(res, cv2.COLOR_RGB2GRAY)
             res = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
             res = cv2.cvtColor(res, cv2.COLOR_GRAY2RGB)
-            
         elif f_type == "Инверсия":
             res = cv2.bitwise_not(res)
-            
         elif f_type == "Резкость":
             kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
             res = cv2.filter2D(res, -1, kernel)
-            
         elif f_type == "CLAHE Контраст":
             lab = cv2.cvtColor(res, cv2.COLOR_RGB2LAB)
             l, a, b = cv2.split(lab)
@@ -179,18 +163,32 @@ class OCRCorrector:
             cl = clahe.apply(l)
             res = cv2.merge((cl, a, b))
             res = cv2.cvtColor(res, cv2.COLOR_LAB2RGB)
-
         return res
 
     def get_final_image(self):
         return self.apply_filters(self.processed_img)
 
-    # --- ВСЯ ОРИГИНАЛЬНАЯ ЛОГИКА НИЖЕ БЕЗ ИЗМЕНЕНИЙ ---
+    def _mode_base_img(self):
+        return self.current_base_img if self.current_base_img is not None else self.original_img
+
+    def _image_to_canvas(self, x, y):
+        return x * self.current_scale + self.image_offset_x, y * self.current_scale + self.image_offset_y
+
+    def _toggle_selected_point(self, idx):
+        if idx in self.selected_points:
+            self.selected_points.remove(idx)
+        else:
+            self.selected_points.add(idx)
+
+    def _clear_selection(self):
+        self.selected_points.clear()
 
     def on_grid_settings_change(self):
-        if self.original_img is None: return
+        if self.original_img is None:
+            return
         val_str = self.grid_size_var.get()
-        if not val_str or not val_str.isdigit(): return
+        if not val_str or not val_str.isdigit():
+            return
         val = int(val_str)
         mode = self.mode_var.get()
         if mode == 0:
@@ -204,51 +202,64 @@ class OCRCorrector:
         self.update_displays()
 
     def on_mode_change(self):
-        if self.processed_img is not None: self.current_base_img = self.processed_img.copy()
+        if self.processed_img is not None:
+            self.current_base_img = self.processed_img.copy()
         self.current_mode = self.mode_var.get()
+        self._clear_selection()
         if self.current_mode in [0, 3]:
             self.grid_spin.state(['!disabled'])
             size = self.warp_grid_size if self.current_mode == 0 else self.rotation_grid_size
             self.grid_size_var.set(str(size))
-        else: self.grid_spin.state(['disabled'])
-        if self.current_mode == 0: self.init_warp_grid()
-        elif self.current_mode == 1: self.init_perspective()
-        elif self.current_mode == 2: self.init_geometry()
-        elif self.current_mode == 3: self.apply_cell_rotations()
+        else:
+            self.grid_spin.state(['disabled'])
+        if self.current_mode == 0:
+            self.init_warp_grid()
+        elif self.current_mode == 1:
+            self.init_perspective()
+        elif self.current_mode == 2:
+            self.init_geometry()
+        elif self.current_mode == 3:
+            self.apply_cell_rotations()
         self.update_displays()
         self.root.focus_set()
 
     def on_click(self, event):
         self.left_canvas.focus_set()
-        if self.original_img is None: return
+        if self.original_img is None:
+            return
         self.dragging_idx, self.dragging_group = None, []
         mode, scale, ox, oy = self.mode_var.get(), self.current_scale, self.image_offset_x, self.image_offset_y
-        PT_TOL, LN_TOL = 15, 8
-        if mode == 0: 
+        PT_TOL = 15
+        ctrl = bool(event.state & 0x0004)
+
+        if mode == 0:
+            hit_idx = None
             for i, p in enumerate(self.points):
                 sx, sy = p[0]*scale + ox, p[1]*scale + oy
-                if abs(sx - event.x) < PT_TOL and abs(sy - event.y) < PT_TOL: self.dragging_idx = i; return
-            for cell in self.triangles:
-                n = len(cell)
-                for i in range(n):
-                    idx1, idx2 = cell[i], cell[(i + 1) % n]
-                    p1 = np.array([self.points[idx1][0]*scale + ox, self.points[idx1][1]*scale + oy])
-                    p2 = np.array([self.points[idx2][0]*scale + ox, self.points[idx2][1]*scale + oy])
-                    mouse = np.array([event.x, event.y])
-                    line_vec = p2 - p1
-                    line_len = np.linalg.norm(line_vec)
-                    if line_len == 0: continue
-                    t = max(0, min(1, np.dot(mouse - p1, line_vec) / (line_len**2)))
-                    if np.linalg.norm(mouse - (p1 + t * line_vec)) < LN_TOL:
-                        self.dragging_group = [idx1, idx2]
-                        self.last_mouse_x, self.last_mouse_y = event.x, event.y
-                        return
+                if abs(sx - event.x) < PT_TOL and abs(sy - event.y) < PT_TOL:
+                    hit_idx = i
+                    break
+
+            if hit_idx is not None:
+                if ctrl:
+                    self._toggle_selected_point(hit_idx)
+                    self.update_displays()
+                    return
+                self.dragging_idx = hit_idx
+                self.selected_points = {hit_idx}
+                return
+
             for cell in self.triangles:
                 poly = [[self.points[i][0]*scale + ox, self.points[i][1]*scale + oy] for i in cell]
                 if cv2.pointPolygonTest(np.array(poly, dtype=np.int32), (event.x, event.y), False) >= 0:
                     self.dragging_group = list(cell)
                     self.last_mouse_x, self.last_mouse_y = event.x, event.y
+                    if ctrl:
+                        for idx in cell:
+                            self.selected_points.add(idx)
+                        self.update_displays()
                     return
+
         elif mode == 3:
             nx, ny = (event.x - ox) / scale, (event.y - oy) / scale
             n = self.rotation_grid_size
@@ -262,57 +273,117 @@ class OCRCorrector:
             if target is not None:
                 for i, p in enumerate(target):
                     if abs(p[0]*scale + ox - event.x) < PT_TOL*1.5 and abs(p[1]*scale + oy - event.y) < PT_TOL*1.5:
-                        self.dragging_idx = i; return
+                        self.dragging_idx = i
+                        return
+
+    def on_right_click(self, event):
+        if self.original_img is None or self.mode_var.get() != 0:
+            return
+
+        nearest_idx = None
+        nearest_dist = 20
+        for i, p in enumerate(self.points):
+            sx, sy = self._image_to_canvas(p[0], p[1])
+            d = ((sx - event.x) ** 2 + (sy - event.y) ** 2) ** 0.5
+            if d < nearest_dist:
+                nearest_dist = d
+                nearest_idx = i
+
+        if nearest_idx is not None:
+            self._toggle_selected_point(nearest_idx)
+            self.update_displays()
+            return
+
+        for cell in self.triangles:
+            poly = np.array([[self.points[i][0]*self.current_scale + self.image_offset_x,
+                              self.points[i][1]*self.current_scale + self.image_offset_y] for i in cell], dtype=np.int32)
+            if cv2.pointPolygonTest(poly, (event.x, event.y), False) >= 0:
+                for idx in cell:
+                    self._toggle_selected_point(idx)
+                self.update_displays()
+                return
 
     def on_drag(self, event):
-        if self.original_img is None or (self.dragging_idx is None and not self.dragging_group): return
+        if self.original_img is None or (self.dragging_idx is None and not self.dragging_group):
+            return
         curr_time = time.time()
-        if curr_time - self.last_update_time < 0.016: return 
+        if curr_time - self.last_update_time < 0.016:
+            return
         self.last_update_time = curr_time
         scale, h, w = self.current_scale, *self.original_img.shape[:2]
-        base = self.current_base_img if self.current_base_img is not None else self.original_img
+        base = self._mode_base_img()
+
         if self.dragging_idx is not None:
-            nx, ny = max(0, min(w, (event.x - self.image_offset_x) / scale)), max(0, min(h, (event.y - self.image_offset_y) / scale))
-            if self.current_mode == 0: self.points[self.dragging_idx] = [nx, ny]; self.process_warp(base, cv2.INTER_NEAREST)
-            elif self.current_mode == 1: self.perspective_corners[self.dragging_idx] = [nx, ny]; self.apply_perspective_transform()
-            elif self.current_mode == 2: self.resize_corners[self.dragging_idx] = [nx, ny]; self.apply_geometric_transform()
+            nx = max(0, min(w, (event.x - self.image_offset_x) / scale))
+            ny = max(0, min(h, (event.y - self.image_offset_y) / scale))
+            if self.current_mode == 0:
+                if self.selected_points and self.dragging_idx in self.selected_points:
+                    dx = nx - self.points[self.dragging_idx][0]
+                    dy = ny - self.points[self.dragging_idx][1]
+                    for idx in list(self.selected_points):
+                        self.points[idx][0] = max(0, min(w, self.points[idx][0] + dx))
+                        self.points[idx][1] = max(0, min(h, self.points[idx][1] + dy))
+                    self.process_warp(base, cv2.INTER_NEAREST)
+                else:
+                    self.points[self.dragging_idx] = [nx, ny]
+                    self.selected_points = {self.dragging_idx}
+                    self.process_warp(base, cv2.INTER_NEAREST)
+            elif self.current_mode == 1:
+                self.perspective_corners[self.dragging_idx] = [nx, ny]
+                self.apply_perspective_transform()
+            elif self.current_mode == 2:
+                self.resize_corners[self.dragging_idx] = [nx, ny]
+                self.apply_geometric_transform()
+
         elif self.dragging_group:
             dx, dy = (event.x - self.last_mouse_x) / scale, (event.y - self.last_mouse_y) / scale
-            for idx in self.dragging_group:
+            group = self.selected_points if self.selected_points else set(self.dragging_group)
+            for idx in group:
                 self.points[idx][0] = max(0, min(w, self.points[idx][0] + dx))
                 self.points[idx][1] = max(0, min(h, self.points[idx][1] + dy))
             self.last_mouse_x, self.last_mouse_y = event.x, event.y
             self.process_warp(base, cv2.INTER_NEAREST)
+
         self.update_displays()
 
     def on_release(self, event):
         if self.current_mode == 0 and (self.dragging_idx is not None or self.dragging_group):
-            base = self.current_base_img if self.current_base_img is not None else self.original_img
+            base = self._mode_base_img()
             self.process_warp(base, cv2.INTER_LINEAR)
         self.dragging_idx, self.dragging_group = None, []
         self.update_displays()
 
     def on_key_press(self, event):
-        if self.root.focus_get() == self.grid_spin or self.mode_var.get() != 3 or not self.selected_cell: return
+        if self.root.focus_get() == self.grid_spin or self.mode_var.get() != 3 or not self.selected_cell:
+            return
         key = event.keysym.lower()
-        if key in ['a', 'ф']: self.cell_angles[self.selected_cell] = (self.cell_angles.get(self.selected_cell, 0) - 90) % 360
-        elif key in ['d', 'в']: self.cell_angles[self.selected_cell] = (self.cell_angles.get(self.selected_cell, 0) + 90) % 360
-        self.apply_cell_rotations(); self.update_displays()
+        if key in ['a', 'ф']:
+            self.cell_angles[self.selected_cell] = (self.cell_angles.get(self.selected_cell, 0) - 90) % 360
+        elif key in ['d', 'в']:
+            self.cell_angles[self.selected_cell] = (self.cell_angles.get(self.selected_cell, 0) + 90) % 360
+        self.apply_cell_rotations()
+        self.update_displays()
 
     def init_warp_grid(self):
-        if self.original_img is None: return
+        if self.original_img is None:
+            return
         h, w, n = *self.original_img.shape[:2], self.warp_grid_size
         self.points = [[float(x), float(y)] for y in np.linspace(0, h, n + 1) for x in np.linspace(0, w, n + 1)]
         self.base_points, self.triangles, cols = [p[:] for p in self.points], [], n + 1
         for j in range(n):
             for i in range(n):
                 p1, p2, p3, p4 = j*cols+i, j*cols+i+1, (j+1)*cols+i, (j+1)*cols+i+1
-                if self.grid_mode_var.get() == "Треугольники": self.triangles.append((p1,p2,p3)); self.triangles.append((p2,p4,p3))
-                else: self.triangles.append((p1, p2, p4, p3))
+                if self.grid_mode_var.get() == "Треугольники":
+                    self.triangles.append((p1,p2,p3))
+                    self.triangles.append((p2,p4,p3))
+                else:
+                    self.triangles.append((p1, p2, p4, p3))
+        self.selected_points.clear()
         self.process_warp(self.original_img, cv2.INTER_LINEAR)
 
     def process_warp(self, base_img, quality):
-        if not self.points: return
+        if not self.points:
+            return
         h, w, out_img = *base_img.shape[:2], np.zeros_like(base_img)
         for cell in self.triangles:
             src_pts, dst_pts = np.float32([self.points[i] for i in cell]), np.float32([self.base_points[i] for i in cell])
@@ -321,9 +392,12 @@ class OCRCorrector:
             cv2.fillConvexPoly(mask, np.int32(dst_pts - (x, y)), (1.0, 1.0, 1.0), 16, 0)
             sx, sy, sw, sh = cv2.boundingRect(src_pts)
             patch = base_img[max(0, sy):min(h, sy+sh), max(0, sx):min(w, sx+sw)]
-            if patch.size == 0: continue
-            if len(cell) == 3: M = cv2.getAffineTransform(np.float32(src_pts-(sx,sy))[:3], np.float32(dst_pts-(x,y))[:3])
-            else: M = cv2.getPerspectiveTransform(np.float32(src_pts-(sx,sy)), np.float32(dst_pts-(x,y)))
+            if patch.size == 0:
+                continue
+            if len(cell) == 3:
+                M = cv2.getAffineTransform(np.float32(src_pts-(sx,sy))[:3], np.float32(dst_pts-(x,y))[:3])
+            else:
+                M = cv2.getPerspectiveTransform(np.float32(src_pts-(sx,sy)), np.float32(dst_pts-(x,y)))
             warped = cv2.warpPerspective(patch, M, (wb, hb), flags=quality) if len(cell)==4 else cv2.warpAffine(patch, M, (wb, hb), flags=quality)
             view_y, view_x = slice(y, min(y+hb, h)), slice(x, min(x+wb, w))
             ph, pw = out_img[view_y, view_x].shape[:2]
@@ -331,49 +405,58 @@ class OCRCorrector:
         self.processed_img = out_img
 
     def apply_cell_rotations(self):
-        base = self.current_base_img if self.current_base_img is not None else self.original_img
-        if base is None: return
+        base = self._mode_base_img()
+        if base is None:
+            return
         h, w, n = *base.shape[:2], self.rotation_grid_size
         out_img, cw, ch = base.copy(), w / n, h / n
         for (r, c), angle in self.cell_angles.items():
-            if angle == 0: continue
+            if angle == 0:
+                continue
             y1, y2, x1, x2 = int(r*ch), int((r+1)*ch), int(c*cw), int((c+1)*cw)
             roi = base[y1:y2, x1:x2]
-            if angle == 90: roi = cv2.rotate(roi, cv2.ROTATE_90_CLOCKWISE)
-            elif angle == 180: roi = cv2.rotate(roi, cv2.ROTATE_180)
-            elif angle == 270: roi = cv2.rotate(roi, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            if angle == 90:
+                roi = cv2.rotate(roi, cv2.ROTATE_90_CLOCKWISE)
+            elif angle == 180:
+                roi = cv2.rotate(roi, cv2.ROTATE_180)
+            elif angle == 270:
+                roi = cv2.rotate(roi, cv2.ROTATE_90_COUNTERCLOCKWISE)
             out_img[y1:y2, x1:x2] = cv2.resize(roi, (x2-x1, y2-y1))
         self.processed_img = out_img
 
     def init_perspective(self):
-        if self.original_img is None: return
+        if self.original_img is None:
+            return
         h, w = self.original_img.shape[:2]
         self.perspective_corners = np.array([[0,0], [w,0], [w,h], [0,h]], dtype=np.float32)
         self.apply_perspective_transform()
 
     def apply_perspective_transform(self):
-        base = self.current_base_img if self.current_base_img is not None else self.original_img
+        base = self._mode_base_img()
         h, w = base.shape[:2]
         M = cv2.getPerspectiveTransform(self.perspective_corners, np.float32([[0,0], [w,0], [w,h], [0,h]]))
         self.processed_img = cv2.warpPerspective(base, M, (w, h))
 
     def init_geometry(self):
-        if self.original_img is None: return
+        if self.original_img is None:
+            return
         h, w = self.original_img.shape[:2]
         self.resize_corners = np.array([[0,0], [w,0], [w,h], [0,h]], dtype=np.float32)
         self.apply_geometric_transform()
 
     def apply_geometric_transform(self):
-        base = self.current_base_img if self.current_base_img is not None else self.original_img
+        base = self._mode_base_img()
         h, w = base.shape[:2]
         M = cv2.getPerspectiveTransform(np.float32([[0,0], [w,0], [w,h], [0,h]]), self.resize_corners)
         self.processed_img = cv2.warpPerspective(base, M, (w, h), borderValue=(255,255,255))
 
     def update_displays(self):
-        if self.original_img is None: return
+        if self.original_img is None:
+            return
         h, w = self.original_img.shape[:2]
         cw, ch = self.left_canvas.winfo_width(), self.left_canvas.winfo_height()
-        if cw < 10: return
+        if cw < 10:
+            return
         self.current_scale = min(cw/w, ch/h) * 0.92
         sw, sh = int(w * self.current_scale), int(h * self.current_scale)
         self.image_offset_x, self.image_offset_y = (cw - sw) // 2, (ch - sh) // 2
@@ -394,11 +477,14 @@ class OCRCorrector:
         if m == 0:
             for c in self.triangles:
                 pts = []
-                for i in c: pts.extend([self.points[i][0]*s+ox, self.points[i][1]*s+oy])
+                for i in c:
+                    pts.extend([self.points[i][0]*s+ox, self.points[i][1]*s+oy])
                 self.left_canvas.create_polygon(pts, fill="", outline="#00ffcc", width=1)
-            for p in self.points:
+            for i, p in enumerate(self.points):
                 px, py = p[0]*s+ox, p[1]*s+oy
-                self.left_canvas.create_oval(px-3, py-3, px+3, py+3, fill="#ff3366")
+                fill = "#ffcc00" if i in self.selected_points else "#ff3366"
+                outline = "#ffffff" if i in self.selected_points else ""
+                self.left_canvas.create_oval(px-3, py-3, px+3, py+3, fill=fill, outline=outline)
         elif m == 1:
             pts = [(p[0]*s+ox, p[1]*s+oy) for p in self.perspective_corners]
             self.left_canvas.create_polygon(pts, fill="", outline="#ffaa00", width=2)
@@ -424,6 +510,7 @@ class OCRCorrector:
     def reset_all(self):
         self.current_base_img, self.selected_cell = None, None
         self.cell_angles.clear()
+        self._clear_selection()
         self.filter_type_var.set("Оригинал")
         self.brightness_var.set(1.0)
         self.contrast_var.set(0)
@@ -432,22 +519,28 @@ class OCRCorrector:
             self.on_mode_change()
 
     def save_image(self):
-        if self.processed_img is None: return
+        if self.processed_img is None:
+            return
         path = filedialog.asksaveasfilename(defaultextension=".png")
-        if path: cv2.imwrite(path, cv2.cvtColor(self.get_final_image(), cv2.COLOR_RGB2BGR))
+        if path:
+            cv2.imwrite(path, cv2.cvtColor(self.get_final_image(), cv2.COLOR_RGB2BGR))
 
     def run_ocr(self):
-        if self.processed_img is None: return
+        if self.processed_img is None:
+            return
         save_path = filedialog.asksaveasfilename(defaultextension=".txt")
-        if not save_path: return
+        if not save_path:
+            return
         try:
             final = self.get_final_image()
             gray = cv2.cvtColor(final, cv2.COLOR_RGB2GRAY)
             text = pytesseract.image_to_string(gray, lang=self.ocr_lang_var.get())
-            with open(save_path, "w", encoding="utf-8") as f: f.write(text)
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write(text)
             cv2.imwrite(os.path.splitext(save_path)[0] + ".png", cv2.cvtColor(final, cv2.COLOR_RGB2BGR))
             messagebox.showinfo("Готово", "Текст и фото сохранены!")
-        except Exception as e: messagebox.showerror("Ошибка", str(e))
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
 
 if __name__ == "__main__":
     root = tk.Tk()
