@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import cv2
@@ -14,7 +15,6 @@ class OCRCorrector:
     def __init__(self, root):
         self.root = root
         self.root.title("OCR Grid Pro + Filters")
-        # ИСПРАВЛЕНО: корректный размер окна
         self.root.geometry("1600x900")
         self.root.configure(bg='#1e1e1e')
         
@@ -29,16 +29,21 @@ class OCRCorrector:
         self.base_points = []
         self.triangles = []
         
+        # Стеки истории изменений для отмены и повтора (Режим сетки)
+        self.undo_stack = []
+        self.redo_stack = []
+        
         self.cell_angles = {}
         self.selected_cell = None
         self.dragging_idx = None
         self.dragging_group = []
-        self.selected_points = set()
+        self.selected_points = set()       # Множество индексов выбранных точек
+        self.first_shift_point = None      # Точка начала диапазона для Shift
         self.last_mouse_x, self.last_mouse_y = 0, 0
         
         self.grid_size_var = tk.StringVar(value="4")
         self.grid_mode_var = tk.StringVar(value="Треугольники")
-        self.ocr_lang_var = tk.StringVar(value="rus+eng") 
+        self.ocr_lang_var = tk.StringVar(value="rus") 
         
         self.filter_type_var = tk.StringVar(value="Оригинал")
         self.brightness_var = tk.DoubleVar(value=1.0)
@@ -51,7 +56,7 @@ class OCRCorrector:
         self.current_scale = 1.0
         
         self.setup_ui()
-        self.root.bind("<KeyPress>", self.on_key_press)
+        self.bind_global_events()
 
     def validate_numeric(self, P):
         return P == "" or P.isdigit()
@@ -60,19 +65,22 @@ class OCRCorrector:
         style = ttk.Style()
         style.theme_use('clam')
         
+        # Настройка кастомного стиля для круглых/квадратных кнопок-иконок
+        style.configure('IconButton.TButton', font=('Segoe UI', 12, 'bold'), width=3, padding=2)
+        
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         top_panel = ttk.Frame(main_frame)
         top_panel.pack(fill=tk.X, pady=(0,10))
         
+        # --- ЛЕВАЯ ЧАСТЬ ПАНЕЛИ (Основные действия и настройки) ---
         ttk.Button(top_panel, text="📁 Загрузить", command=self.load_image).pack(side=tk.LEFT, padx=5)
-        ttk.Button(top_panel, text="🔄 Сброс к началу", command=self.hard_reset).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_panel, text="📝 OCR + Save", command=self.run_ocr).pack(side=tk.LEFT, padx=5)
         ttk.Button(top_panel, text="💾 Сохранить фото", command=self.save_image).pack(side=tk.LEFT, padx=5)
         
         ttk.Label(top_panel, text="Язык:").pack(side=tk.LEFT, padx=(20, 5))
-        ttk.Combobox(top_panel, textvariable=self.ocr_lang_var, values=["rus+eng", "eng+rus", "rus", "eng"], width=10, state="readonly").pack(side=tk.LEFT, padx=5)
+        ttk.Combobox(top_panel, textvariable=self.ocr_lang_var, values=["rus", "eng"], width=10, state="readonly").pack(side=tk.LEFT, padx=5)
         
         ttk.Label(top_panel, text="Сетка:").pack(side=tk.LEFT, padx=(20,5))
         vcmd = (self.root.register(self.validate_numeric), '%P')
@@ -84,7 +92,17 @@ class OCRCorrector:
         self.mode_combo.pack(side=tk.LEFT, padx=5)
         self.mode_combo.bind("<<ComboboxSelected>>", lambda e: self.on_grid_settings_change())
 
-        filter_panel = ttk.LabelFrame(main_frame, text="🛠 Настройка финального вида (фильтры)")
+        btn_redo = ttk.Button(top_panel, text="->", style='IconButton.TButton', command=self.redo)
+        btn_redo.pack(side=tk.RIGHT, padx=2)
+        ttk.ToolTip(btn_redo, "Повторить (Ctrl+Y)") if hasattr(self, 'ToolTip') else None
+
+        btn_undo = ttk.Button(top_panel, text="<-", style='IconButton.TButton', command=self.undo)
+        btn_undo.pack(side=tk.RIGHT, padx=2)
+
+        btn_reset = ttk.Button(top_panel, text="🔄", style='IconButton.TButton', command=self.hard_reset)
+        btn_reset.pack(side=tk.RIGHT, padx=(20, 2))
+
+        filter_panel = ttk.LabelFrame(main_frame, text="🛠 Фильтры")
         filter_panel.pack(fill=tk.X, pady=(5,0))
 
         ttk.Label(filter_panel, text="Фильтр:").pack(side=tk.LEFT, padx=5)
@@ -109,7 +127,7 @@ class OCRCorrector:
         img_frame = ttk.Frame(main_frame)
         img_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        left_frame = ttk.LabelFrame(img_frame, text="📄 Текущий вход (Редактор)")
+        left_frame = ttk.LabelFrame(img_frame, text="📄 Редактор")
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,5))
         self.left_canvas = tk.Canvas(left_frame, bg='#2b2b2b', highlightthickness=0)
         self.left_canvas.pack(fill=tk.BOTH, expand=True)
@@ -123,7 +141,45 @@ class OCRCorrector:
         self.left_canvas.bind("<Button-3>", self.on_right_click)
         self.left_canvas.bind("<B1-Motion>", self.on_drag)
         self.left_canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.left_canvas.bind("<MouseWheel>", self.on_wheel_scaling)
         self.left_canvas.bind("<Configure>", lambda e: self.update_displays())
+
+    def bind_global_events(self):
+        self.root.bind("<KeyPress>", self.on_key_press)
+        self.root.bind("<Control-z>", lambda e: self.undo())
+        self.root.bind("<Control-y>", lambda e: self.redo())
+        self.root.bind("<Control-a>", lambda e: self.select_all())
+
+    # --- Логика Undo / Redo историй изменений ---
+    def save_state(self):
+        if self.mode_var.get() == 0 and self.points:
+            self.undo_stack.append([p[:] for p in self.points])
+            if len(self.undo_stack) > 50: 
+                self.undo_stack.pop(0)
+            self.redo_stack.clear()
+
+    def undo(self):
+        if self.mode_var.get() == 0 and self.undo_stack:
+            self.redo_stack.append([p[:] for p in self.points])
+            self.points = self.undo_stack.pop()
+            self.process_warp(self.original_img, cv2.INTER_LINEAR)
+            self.update_displays()
+
+    def redo(self):
+        if self.mode_var.get() == 0 and self.redo_stack:
+            self.undo_stack.append([p[:] for p in self.points])
+            self.points = self.redo_stack.pop()
+            self.process_warp(self.original_img, cv2.INTER_LINEAR)
+            self.update_displays()
+
+    def select_all(self):
+        if self.mode_var.get() == 0 and self.points:
+            self.selected_points = set(range(len(self.points)))
+            self.update_displays()
+
+    def canvas_to_img(self, x, y):
+        return ((x - self.image_offset_x) / self.current_scale, 
+                (y - self.image_offset_y) / self.current_scale)
 
     def apply_filters(self, img):
         if img is None: return None
@@ -161,6 +217,8 @@ class OCRCorrector:
         self.selected_points.clear()
         self.cell_angles.clear()
         self.selected_cell = None
+        self.undo_stack.clear()
+        self.redo_stack.clear()
 
         if mode == 0:
             self.grid_spin.state(['!disabled'])
@@ -272,24 +330,91 @@ class OCRCorrector:
 
     def on_click(self, event):
         if self.original_img is None: return
+        self.left_canvas.focus_set()
         self.dragging_idx, self.dragging_group = None, []
         mode, scale, ox, oy = self.mode_var.get(), self.current_scale, self.image_offset_x, self.image_offset_y
         PT_TOL = 15
-        ctrl = bool(event.state & 0x0004)
+        
+        ctrl = bool(event.state & 0x0004) or bool(event.state & 0x0080) # Windows / Linux Ctrl masks
+        shift = bool(event.state & 0x0001)
 
         if mode == 0:
-            for i, p in enumerate(self.points):
-                if abs(p[0]*scale + ox - event.x) < PT_TOL and abs(p[1]*scale + oy - event.y) < PT_TOL:
-                    if ctrl: self.selected_points.add(i)
-                    else: self.selected_points = {i}
-                    self.dragging_idx = i
-                    return
+            self.save_state()
+            mx, my = self.canvas_to_img(event.x, event.y)
+            
+            # 1. Поиск клика по узлу (точке)
+            clicked_idx = next((i for i, p in enumerate(self.points) 
+                                if np.hypot(p[0]-mx, p[1]-my) < PT_TOL/scale), None)
+            
+            if clicked_idx is not None:
+                if ctrl:
+                    if clicked_idx in self.selected_points:
+                        self.selected_points.remove(clicked_idx)
+                    else:
+                        self.selected_points.add(clicked_idx)
+                elif shift and self.first_shift_point is not None:
+                    start, end = min(self.first_shift_point, clicked_idx), max(self.first_shift_point, clicked_idx)
+                    for i in range(start, end + 1):
+                        self.selected_points.add(i)
+                else:
+                    if clicked_idx not in self.selected_points:
+                        self.selected_points = {clicked_idx}
+                self.first_shift_point = clicked_idx
+                self.dragging_idx = clicked_idx
+                self.update_displays()
+                return
+
+            # 2. Поиск клика по грани (ребру линии)
+            edge_found = False
+            for cell in self.triangles:
+                num_pts = len(cell)
+                for i in range(num_pts):
+                    p1_idx, p2_idx = cell[i], cell[(i+1)%num_pts]
+                    p1, p2 = np.array(self.points[p1_idx]), np.array(self.points[p2_idx])
+                    
+                    line_vec = p2 - p1
+                    p_vec = np.array([mx, my]) - p1
+                    line_len = np.linalg.norm(line_vec)
+                    if line_len == 0: continue
+                    
+                    unit_line = line_vec / line_len
+                    projection = np.dot(p_vec, unit_line)
+                    
+                    if 0 <= projection <= line_len:
+                        dist = np.linalg.norm(p_vec - projection * unit_line)
+                        if dist < 8 / scale:
+                            if ctrl:
+                                self.selected_points.update([p1_idx, p2_idx])
+                            else:
+                                self.selected_points = {p1_idx, p2_idx}
+                            edge_found = True
+                            self.dragging_group = list(self.selected_points)
+                            self.last_mouse_x, self.last_mouse_y = event.x, event.y
+                            break
+                if edge_found: break
+            
+            if edge_found:
+                self.update_displays()
+                return
+
+            # 3. Поиск клика внутри полигона (ячейки)
             for cell in self.triangles:
                 poly = [[self.points[i][0]*scale + ox, self.points[i][1]*scale + oy] for i in cell]
                 if cv2.pointPolygonTest(np.array(poly, dtype=np.int32), (event.x, event.y), False) >= 0:
-                    self.dragging_group = list(cell)
+                    if ctrl:
+                        self.selected_points.update(cell)
+                    else:
+                        self.selected_points = set(cell)
+                    self.dragging_group = list(self.selected_points)
                     self.last_mouse_x, self.last_mouse_y = event.x, event.y
+                    self.update_displays()
                     return
+            
+            # Клик мимо всего — сбрасываем выделение, если Ctrl/Shift не зажаты
+            if not (ctrl or shift):
+                self.selected_points.clear()
+                self.update_displays()
+
         elif mode == 3:
             nx, ny = (event.x - ox) / scale, (event.y - oy) / scale
             try: n = int(self.grid_size_var.get())
@@ -315,8 +440,8 @@ class OCRCorrector:
             if self.mode_var.get() == 0:
                 dx, dy = nx - self.points[self.dragging_idx][0], ny - self.points[self.dragging_idx][1]
                 for idx in self.selected_points:
-                    self.points[idx][0] += dx
-                    self.points[idx][1] += dy
+                    self.points[idx][0] = np.clip(self.points[idx][0] + dx, 0, w)
+                    self.points[idx][1] = np.clip(self.points[idx][1] + dy, 0, h)
                 self.process_warp(self.original_img, cv2.INTER_NEAREST)
             elif self.mode_var.get() == 1:
                 self.perspective_corners[self.dragging_idx] = [nx, ny]
@@ -328,15 +453,38 @@ class OCRCorrector:
             dx, dy = (event.x - self.last_mouse_x) / scale, (event.y - self.last_mouse_y) / scale
             target_pts = self.selected_points if self.selected_points else self.dragging_group
             for idx in target_pts:
-                self.points[idx][0] += dx
-                self.points[idx][1] += dy
+                self.points[idx][0] = np.clip(self.points[idx][0] + dx, 0, w)
+                self.points[idx][1] = np.clip(self.points[idx][1] + dy, 0, h)
             self.last_mouse_x, self.last_mouse_y = event.x, event.y
             self.process_warp(self.original_img, cv2.INTER_NEAREST)
         self.update_displays()
 
     def on_release(self, event):
-        if self.mode_var.get() == 0: self.process_warp(self.original_img, cv2.INTER_LINEAR)
+        if self.mode_var.get() == 0: 
+            self.process_warp(self.original_img, cv2.INTER_LINEAR)
         self.dragging_idx, self.dragging_group = None, []
+        self.update_displays()
+
+    def on_wheel_scaling(self, event):
+        # Проверяем, зажат ли Alt (стандартные маски под разные ОС)
+        is_alt_pressed = (event.state & 0x0020) != 0 or (event.state & 131072) != 0
+        if not is_alt_pressed or not self.selected_points or self.mode_var.get() != 0: 
+            return
+        
+        self.save_state()
+        k = 1.05 if event.delta > 0 else 0.95
+        
+        # Вычисляем геометрический центр текущей группы выделенных точек
+        pts_coords = np.array([self.points[i] for i in self.selected_points])
+        center = np.mean(pts_coords, axis=0)
+        
+        h, w = self.original_img.shape[:2]
+        for i in self.selected_points:
+            p = np.array(self.points[i])
+            new_p = center + (p - center) * k
+            self.points[i] = [np.clip(new_p[0], 0, w), np.clip(new_p[1], 0, h)]
+            
+        self.process_warp(self.original_img, cv2.INTER_LINEAR)
         self.update_displays()
 
     def on_key_press(self, event):
@@ -376,13 +524,22 @@ class OCRCorrector:
                 self.left_canvas.create_polygon(pts, fill="", outline="#00ffcc", width=1)
             for i, p in enumerate(self.points):
                 px, py = p[0]*s+ox, p[1]*s+oy
-                self.left_canvas.create_oval(px-3, py-3, px+3, py+3, fill="#ff3366" if i not in self.selected_points else "#ffcc00")
+                is_sel = i in self.selected_points
+                r = 5 if is_sel else 3
+                color = "#ffcc00" if is_sel else "#ff3366"
+                self.left_canvas.create_oval(px-r, py-r, px+r, py+r, fill=color, outline="white" if is_sel else "")
         elif m == 1:
             pts = [(p[0]*s+ox, p[1]*s+oy) for p in self.perspective_corners]
             self.left_canvas.create_polygon(pts, fill="", outline="#ffaa00", width=2)
+            for p in self.perspective_corners:
+                px, py = p[0]*s+ox, p[1]*s+oy
+                self.left_canvas.create_oval(px-5, py-5, px+5, py+5, fill="#ffaa00", outline="white")
         elif m == 2:
             pts = [(p[0]*s+ox, p[1]*s+oy) for p in self.resize_corners]
             self.left_canvas.create_polygon(pts, fill="", outline="#00aaff", width=2)
+            for p in self.resize_corners:
+                px, py = p[0]*s+ox, p[1]*s+oy
+                self.left_canvas.create_oval(px-5, py-5, px+5, py+5, fill="#00aaff", outline="white")
         elif m == 3:
             try: n = int(self.grid_size_var.get())
             except: n = 4
@@ -406,6 +563,9 @@ class OCRCorrector:
         if self.master_original is not None:
             self.original_img = self.master_original.copy()
             self.processed_img = self.original_img.copy()
+            self.selected_points.clear()
+            self.undo_stack.clear()
+            self.redo_stack.clear()
             self.mode_var.set(0)
             self.on_mode_change()
 
