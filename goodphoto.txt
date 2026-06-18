@@ -1,0 +1,52 @@
+these =forts pushed forward the local theory of diffcrcntial grometry in = big
+
+step-
+
+Second, mathcmatici
+
+ans including de Rham. Hodze, Kodaima, Hopf, Lef
+schetz, Whitney. Weil and Chern established a close nelationship betwecn dif-
+ferential geometry =nd topology and algebraic geometsy,
+
+which were blossoming
+A
+
+= this period. Global differcntial scometry started taking its form.
+Third, along the vein of classical differential geonactey,
+surfaces,
+
+of Ale:
+
+Eeometry of comvex
+yothetic and integral geomectry advanced sreatly under the Icadership
+androff. Cohn-Vossen, Pogorelov, Busemann, Rauch, and Santalo.
+
+Finally, by the maturi
+
+v of the theory of differeatial equations, meome
+ters storted using amalvtical methods to tackle problems in geometry. In the
+reverse direction, people discovered a larme number of significant difficrential
+equations from diffeccntial geometry. New approaches or methods: are very of
+ten required to solve these cquations. Thus analysts also watched progress in.
+
+scometry closely. Leaders in this aspect include Hadamard, Morse, Lewy, Mor
+
+rey. Bochner, Nash, Moser, Nirenberg, and Efimov. Their works have formed
+the cornerstone for the application of nonlinear partial differential equations in
+Zeomnetry in the past twenty years.
+
+We attempt to describe major achrevements in all these aspects in this book.
+The readex will find that differential geometry isa whole subject where all theee
+aspects interlace in a natural way. In this first volume we shall study differential
+<guations on a manifold and derive results relating its curvaturc to its topolosy:
+Only 2 single equation will be treated. Systerns of differential equations will be.
+Postponcd to the forthcoming second and third| volumes, where we shall discu=s
+subjects including Hodge theory. minimal submsnifolds, harmonic maps, Sarmge
+ficlds, Kahler manifolds. and Mong-Ampere cquations. Relationship between'
+
+Seomctry and topology. algcbraic geometry, gencral rclativity and high ooy
+Physics will also be discissed-
+
+Laplace operator, the most fmportant difficrential operatar
+Strx: It importence
+
